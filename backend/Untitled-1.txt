@@ -1,0 +1,831 @@
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+
+/* =========================================================
+ *  Elliptic Curve over F_p (p = 113)
+ *  Curve: y^2 = x^3 + 33x + 111 (mod p)
+ * ========================================================= */
+
+#define P 113
+
+typedef struct {
+    int x;
+    int y;
+    int infinity;  // 1 if point at infinity
+} ECPoint;
+
+/* ----- modular arithmetic mod P ----- */
+
+static int modp(int a) {
+    int r = a % P;
+    if (r < 0) r += P;
+    return r;
+}
+
+/* Extended Euclidean algorithm to find modular inverse */
+static int modinv(int a) {
+    int t = 0, newt = 1;
+    int r = P, newr = modp(a);
+    while (newr != 0) {
+        int q = r / newr;
+        int tmp = t - q * newt;
+        t = newt;
+        newt = tmp;
+
+        tmp = r - q * newr;
+        r = newr;
+        newr = tmp;
+    }
+    if (r > 1) {
+        // No inverse (should not happen for nonzero a mod prime P)
+        return -1;
+    }
+    if (t < 0) t += P;
+    return t;
+}
+
+/* Check if (x,y) is on the curve */
+static int is_on_curve(int x, int y) {
+    int lhs = modp(y * y);
+    int rhs = modp(x * x * x + 33 * x + 111);
+    return lhs == rhs;
+}
+
+/* Point addition on the curve */
+static ECPoint ec_add(ECPoint P1, ECPoint P2) {
+    ECPoint R;
+
+    // Handle point at infinity cases
+    if (P1.infinity) return P2;
+    if (P2.infinity) return P1;
+
+    if (P1.x == P2.x) {
+        if (P1.y == P2.y) {
+            // Point doubling
+            if (P1.y == 0) {
+                // Tangent is vertical -> infinity
+                R.infinity = 1;
+                return R;
+            }
+            int num = modp(3 * P1.x * P1.x + 33);  // 3x^2 + a
+            int den = modinv(modp(2 * P1.y));      // 2y
+            int s = modp(num * den);
+
+            int xr = modp(s * s - 2 * P1.x);
+            int yr = modp(s * (P1.x - xr) - P1.y);
+            R.x = xr;
+            R.y = yr;
+            R.infinity = 0;
+            return R;
+        } else {
+            // P1 == -P2 -> point at infinity
+            R.infinity = 1;
+            return R;
+        }
+    } else {
+        // P1 != P2
+        int num = modp(P2.y - P1.y);
+        int den = modinv(modp(P2.x - P1.x));
+        int s = modp(num * den);
+
+        int xr = modp(s * s - P1.x - P2.x);
+        int yr = modp(s * (P1.x - xr) - P1.y);
+
+        R.x = xr;
+        R.y = yr;
+        R.infinity = 0;
+        return R;
+    }
+}
+
+/* Scalar multiplication: k * P using double-and-add */
+static ECPoint ec_scalar_mul(int k, ECPoint P) {
+    ECPoint R;
+    R.infinity = 1;  // start with point at infinity
+
+    ECPoint Q = P;
+    while (k > 0) {
+        if (k & 1) {
+            R = ec_add(R, Q);
+        }
+        Q = ec_add(Q, Q);
+        k >>= 1;
+    }
+    return R;
+}
+
+/* Find some non-infinity point alpha on the curve by brute force */
+static ECPoint find_alpha(void) {
+    ECPoint A;
+    A.infinity = 1;
+    for (int x = 0; x < P; x++) {
+        for (int y = 0; y < P; y++) {
+            if (is_on_curve(x, y)) {
+                A.x = x;
+                A.y = y;
+                A.infinity = 0;
+                return A;
+            }
+        }
+    }
+    // Should not happen for a valid curve
+    return A;
+}
+
+/* =========================================================
+ *  SHA-256 implementation
+ * ========================================================= */
+
+#define ROTR(x, n) ((x >> n) | (x << (32 - n)))
+#define SHR(x, n)  (x >> n)
+
+#define CH(x,y,z)  ((x & y) ^ (~x & z))
+#define MAJ(x,y,z) ((x & y) ^ (x & z) ^ (y & z))
+#define EP0(x)     (ROTR(x,2) ^ ROTR(x,13) ^ ROTR(x,22))
+#define EP1(x)     (ROTR(x,6) ^ ROTR(x,11) ^ ROTR(x,25))
+#define SIG0(x)    (ROTR(x,7) ^ ROTR(x,18) ^ SHR(x,3))
+#define SIG1(x)    (ROTR(x,17) ^ ROTR(x,19) ^ SHR(x,10))
+
+static const uint32_t K256[64] = {
+    0x428a2f98UL,0x71374491UL,0xb5c0fbcfUL,0xe9b5dba5UL,
+    0x3956c25bUL,0x59f111f1UL,0x923f82a4UL,0xab1c5ed5UL,
+    0xd807aa98UL,0x12835b01UL,0x243185beUL,0x550c7dc3UL,
+    0x72be5d74UL,0x80deb1feUL,0x9bdc06a7UL,0xc19bf174UL,
+    0xe49b69c1UL,0xefbe4786UL,0x0fc19dc6UL,0x240ca1ccUL,
+    0x2de92c6fUL,0x4a7484aaUL,0x5cb0a9dcUL,0x76f988daUL,
+    0x983e5152UL,0xa831c66dUL,0xb00327c8UL,0xbf597fc7UL,
+    0xc6e00bf3UL,0xd5a79147UL,0x06ca6351UL,0x14292967UL,
+    0x27b70a85UL,0x2e1b2138UL,0x4d2c6dfcUL,0x53380d13UL,
+    0x650a7354UL,0x766a0abbUL,0x81c2c92eUL,0x92722c85UL,
+    0xa2bfe8a1UL,0xa81a664bUL,0xc24b8b70UL,0xc76c51a3UL,
+    0xd192e819UL,0xd6990624UL,0xf40e3585UL,0x106aa070UL,
+    0x19a4c116UL,0x1e376c08UL,0x2748774cUL,0x34b0bcb5UL,
+    0x391c0cb3UL,0x4ed8aa4aUL,0x5b9cca4fUL,0x682e6ff3UL,
+    0x748f82eeUL,0x78a5636fUL,0x84c87814UL,0x8cc70208UL,
+    0x90befffaUL,0xa4506cebUL,0xbef9a3f7UL,0xc67178f2UL
+};
+
+typedef struct {
+    uint8_t data[64];
+    uint32_t datalen;
+    uint64_t bitlen;
+    uint32_t state[8];
+} SHA256_CTX;
+
+static void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
+    uint32_t a,b,c,d,e,f,g,h,i,j,t1,t2,m[64];
+
+    for (i = 0, j = 0; i < 16; ++i, j += 4) {
+        m[i] = ((uint32_t)data[j] << 24) |
+               ((uint32_t)data[j + 1] << 16) |
+               ((uint32_t)data[j + 2] << 8) |
+               ((uint32_t)data[j + 3]);
+    }
+    for ( ; i < 64; ++i) {
+        m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
+    }
+
+    a = ctx->state[0];
+    b = ctx->state[1];
+    c = ctx->state[2];
+    d = ctx->state[3];
+    e = ctx->state[4];
+    f = ctx->state[5];
+    g = ctx->state[6];
+    h = ctx->state[7];
+
+    for (i = 0; i < 64; ++i) {
+        t1 = h + EP1(e) + CH(e,f,g) + K256[i] + m[i];
+        t2 = EP0(a) + MAJ(a,b,c);
+        h = g;
+        g = f;
+        f = e;
+        e = d + t1;
+        d = c;
+        c = b;
+        b = a;
+        a = t1 + t2;
+    }
+
+    ctx->state[0] += a;
+    ctx->state[1] += b;
+    ctx->state[2] += c;
+    ctx->state[3] += d;
+    ctx->state[4] += e;
+    ctx->state[5] += f;
+    ctx->state[6] += g;
+    ctx->state[7] += h;
+}
+
+static void sha256_init(SHA256_CTX *ctx) {
+    ctx->datalen = 0;
+    ctx->bitlen = 0;
+    ctx->state[0] = 0x6a09e667UL;
+    ctx->state[1] = 0xbb67ae85UL;
+    ctx->state[2] = 0x3c6ef372UL;
+    ctx->state[3] = 0xa54ff53aUL;
+    ctx->state[4] = 0x510e527fUL;
+    ctx->state[5] = 0x9b05688cUL;
+    ctx->state[6] = 0x1f83d9abUL;
+    ctx->state[7] = 0x5be0cd19UL;
+}
+
+static void sha256_update(SHA256_CTX *ctx, const uint8_t data[], size_t len) {
+    for (size_t i = 0; i < len; ++i) {
+        ctx->data[ctx->datalen] = data[i];
+        ctx->datalen++;
+        if (ctx->datalen == 64) {
+            sha256_transform(ctx, ctx->data);
+            ctx->bitlen += 512;
+            ctx->datalen = 0;
+        }
+    }
+}
+
+static void sha256_final(SHA256_CTX *ctx, uint8_t hash[]) {
+    uint32_t i = ctx->datalen;
+
+    // Pad current block
+    if (ctx->datalen < 56) {
+        ctx->data[i++] = 0x80;
+        while (i < 56) ctx->data[i++] = 0x00;
+    } else {
+        ctx->data[i++] = 0x80;
+        while (i < 64) ctx->data[i++] = 0x00;
+        sha256_transform(ctx, ctx->data);
+        memset(ctx->data, 0, 56);
+    }
+
+    // Append length in bits (big-endian)
+    ctx->bitlen += ctx->datalen * 8;
+    ctx->data[63] = (uint8_t)(ctx->bitlen);
+    ctx->data[62] = (uint8_t)(ctx->bitlen >> 8);
+    ctx->data[61] = (uint8_t)(ctx->bitlen >> 16);
+    ctx->data[60] = (uint8_t)(ctx->bitlen >> 24);
+    ctx->data[59] = (uint8_t)(ctx->bitlen >> 32);
+    ctx->data[58] = (uint8_t)(ctx->bitlen >> 40);
+    ctx->data[57] = (uint8_t)(ctx->bitlen >> 48);
+    ctx->data[56] = (uint8_t)(ctx->bitlen >> 56);
+    sha256_transform(ctx, ctx->data);
+
+    // Output hash
+    for (i = 0; i < 4; ++i) {
+        hash[i]      = (uint8_t)((ctx->state[0] >> (24 - i * 8)) & 0xff);
+        hash[i + 4]  = (uint8_t)((ctx->state[1] >> (24 - i * 8)) & 0xff);
+        hash[i + 8]  = (uint8_t)((ctx->state[2] >> (24 - i * 8)) & 0xff);
+        hash[i + 12] = (uint8_t)((ctx->state[3] >> (24 - i * 8)) & 0xff);
+        hash[i + 16] = (uint8_t)((ctx->state[4] >> (24 - i * 8)) & 0xff);
+        hash[i + 20] = (uint8_t)((ctx->state[5] >> (24 - i * 8)) & 0xff);
+        hash[i + 24] = (uint8_t)((ctx->state[6] >> (24 - i * 8)) & 0xff);
+        hash[i + 28] = (uint8_t)((ctx->state[7] >> (24 - i * 8)) & 0xff);
+    }
+}
+
+/* Convenience wrapper */
+static void sha256(const uint8_t *msg, size_t len, uint8_t out[32]) {
+    SHA256_CTX ctx;
+    sha256_init(&ctx);
+    sha256_update(&ctx, msg, len);
+    sha256_final(&ctx, out);
+}
+
+/* =========================================================
+ *  AES-256 (ECB building block) + CBC mode with PKCS#7
+ * ========================================================= */
+
+#define AES_BLOCK_SIZE 16
+#define AES_256_KEY_SIZE 32
+#define AES_256_NK 8
+#define AES_256_NR 14
+#define AES_256_NB 4
+
+static const uint8_t sbox[256] = {
+  /* 0x00 */ 0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
+  /* 0x10 */ 0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
+  /* 0x20 */ 0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
+  /* 0x30 */ 0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
+  /* 0x40 */ 0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,
+  /* 0x50 */ 0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
+  /* 0x60 */ 0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,
+  /* 0x70 */ 0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
+  /* 0x80 */ 0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,
+  /* 0x90 */ 0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
+  /* 0xA0 */ 0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,
+  /* 0xB0 */ 0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
+  /* 0xC0 */ 0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,
+  /* 0xD0 */ 0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
+  /* 0xE0 */ 0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
+  /* 0xF0 */ 0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16
+};
+
+static const uint8_t rsbox[256] = {
+  /* 0x00 */ 0x52,0x09,0x6a,0xd5,0x30,0x36,0xa5,0x38,0xbf,0x40,0xa3,0x9e,0x81,0xf3,0xd7,0xfb,
+  /* 0x10 */ 0x7c,0xe3,0x39,0x82,0x9b,0x2f,0xff,0x87,0x34,0x8e,0x43,0x44,0xc4,0xde,0xe9,0xcb,
+  /* 0x20 */ 0x54,0x7b,0x94,0x32,0xa6,0xc2,0x23,0x3d,0xee,0x4c,0x95,0x0b,0x42,0xfa,0xc3,0x4e,
+  /* 0x30 */ 0x08,0x2e,0xa1,0x66,0x28,0xd9,0x24,0xb2,0x76,0x5b,0xa2,0x49,0x6d,0x8b,0xd1,0x25,
+  /* 0x40 */ 0x72,0xf8,0xf6,0x64,0x86,0x68,0x98,0x16,0xd4,0xa4,0x5c,0xcc,0x5d,0x65,0xb6,0x92,
+  /* 0x50 */ 0x6c,0x70,0x48,0x50,0xfd,0xed,0xb9,0xda,0x5e,0x15,0x46,0x57,0xa7,0x8d,0x9d,0x84,
+  /* 0x60 */ 0x90,0xd8,0xab,0x00,0x8c,0xbc,0xd3,0x0a,0xf7,0xe4,0x58,0x05,0xb8,0xb3,0x45,0x06,
+  /* 0x70 */ 0xd0,0x2c,0x1e,0x8f,0xca,0x3f,0x0f,0x02,0xc1,0xaf,0xbd,0x03,0x01,0x13,0x8a,0x6b,
+  /* 0x80 */ 0x3a,0x91,0x11,0x41,0x4f,0x67,0xdc,0xea,0x97,0xf2,0xcf,0xce,0xf0,0xb4,0xe6,0x73,
+  /* 0x90 */ 0x96,0xac,0x74,0x22,0xe7,0xad,0x35,0x85,0xe2,0xf9,0x37,0xe8,0x1c,0x75,0xdf,0x6e,
+  /* 0xA0 */ 0x47,0xf1,0x1a,0x71,0x1d,0x29,0xc5,0x89,0x6f,0xb7,0x62,0x0e,0xaa,0x18,0xbe,0x1b,
+  /* 0xB0 */ 0xfc,0x56,0x3e,0x4b,0xc6,0xd2,0x79,0x20,0x9a,0xdb,0xc0,0xfe,0x78,0xcd,0x5a,0xf4,
+  /* 0xC0 */ 0x1f,0xdd,0xa8,0x33,0x88,0x07,0xc7,0x31,0xb1,0x12,0x10,0x59,0x27,0x80,0xec,0x5f,
+  /* 0xD0 */ 0x60,0x51,0x7f,0xa9,0x19,0xb5,0x4a,0x0d,0x2d,0xe5,0x7a,0x9f,0x93,0xc9,0x9c,0xef,
+  /* 0xE0 */ 0xa0,0xe0,0x3b,0x4d,0xae,0x2a,0xf5,0xb0,0xc8,0xeb,0xbb,0x3c,0x83,0x53,0x99,0x61,
+  /* 0xF0 */ 0x17,0x2b,0x04,0x7e,0xba,0x77,0xd6,0x26,0xe1,0x69,0x14,0x63,0x55,0x21,0x0c,0x7d
+};
+
+static const uint8_t Rcon[15] = {
+    0x00, // unused
+    0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x1B,0x36,
+    0x6C,0xD8,0xAB,0x4D
+};
+
+typedef struct {
+    uint8_t round_key[240]; // 4*(Nr+1)*Nb = 4*15*4 = 240 max
+} AES256_CTX;
+
+/* Galois multiply by 2 in GF(2^8) */
+static uint8_t xtime(uint8_t x) {
+    return (uint8_t)((x << 1) ^ ((x & 0x80) ? 0x1b : 0x00));
+}
+
+/* Galois multiply arbitrary in GF(2^8) */
+static uint8_t gmul(uint8_t a, uint8_t b) {
+    uint8_t p = 0;
+    for (int i = 0; i < 8; i++) {
+        if (b & 1) p ^= a;
+        uint8_t hi = a & 0x80;
+        a <<= 1;
+        if (hi) a ^= 0x1b;
+        b >>= 1;
+    }
+    return p;
+}
+
+/* Key expansion for AES-256 */
+static void aes256_key_expansion(const uint8_t key[32], AES256_CTX *ctx) {
+    uint8_t temp[4];
+    int i = 0;
+    uint8_t *rk = ctx->round_key;
+
+    // First Nk (8) words from the key
+    while (i < 32) {
+        rk[i] = key[i];
+        i++;
+    }
+
+    int bytes_generated = 32;
+    int rcon_iter = 1;
+
+    uint8_t ktemp[4];
+
+    while (bytes_generated < 240) {
+        // The last 4 bytes from previous word
+        for (int j = 0; j < 4; j++)
+            ktemp[j] = rk[bytes_generated - 4 + j];
+
+        if (bytes_generated % 32 == 0) {
+            // RotWord
+            uint8_t t = ktemp[0];
+            ktemp[0] = ktemp[1];
+            ktemp[1] = ktemp[2];
+            ktemp[2] = ktemp[3];
+            ktemp[3] = t;
+            // SubWord
+            for (int j = 0; j < 4; j++)
+                ktemp[j] = sbox[ktemp[j]];
+            // Rcon
+            ktemp[0] ^= Rcon[rcon_iter++];
+        } else if (bytes_generated % 32 == 16) {
+            // SubWord
+            for (int j = 0; j < 4; j++)
+                ktemp[j] = sbox[ktemp[j]];
+        }
+
+        for (int j = 0; j < 4; j++) {
+            rk[bytes_generated] = rk[bytes_generated - 32] ^ ktemp[j];
+            bytes_generated++;
+        }
+    }
+}
+
+/* AddRoundKey: XOR state with round key */
+static void aes_add_round_key(uint8_t state[16], const uint8_t *round_key) {
+    for (int i = 0; i < 16; i++)
+        state[i] ^= round_key[i];
+}
+
+/* SubBytes */
+static void aes_sub_bytes(uint8_t state[16]) {
+    for (int i = 0; i < 16; i++)
+        state[i] = sbox[state[i]];
+}
+
+/* Inv SubBytes */
+static void aes_inv_sub_bytes(uint8_t state[16]) {
+    for (int i = 0; i < 16; i++)
+        state[i] = rsbox[state[i]];
+}
+
+/* ShiftRows */
+static void aes_shift_rows(uint8_t state[16]) {
+    uint8_t temp;
+
+    // Row 1: shift left by 1
+    temp            = state[1];
+    state[1]        = state[5];
+    state[5]        = state[9];
+    state[9]        = state[13];
+    state[13]       = temp;
+
+    // Row 2: shift left by 2
+    temp            = state[2];
+    state[2]        = state[10];
+    state[10]       = temp;
+    temp            = state[6];
+    state[6]        = state[14];
+    state[14]       = temp;
+
+    // Row 3: shift left by 3 (right by 1)
+    temp            = state[3];
+    state[3]        = state[15];
+    state[15]       = state[11];
+    state[11]       = state[7];
+    state[7]        = temp;
+}
+
+/* Inv ShiftRows */
+static void aes_inv_shift_rows(uint8_t state[16]) {
+    uint8_t temp;
+
+    // Row 1: shift right by 1
+    temp            = state[13];
+    state[13]       = state[9];
+    state[9]        = state[5];
+    state[5]        = state[1];
+    state[1]        = temp;
+
+    // Row 2: shift right by 2
+    temp            = state[2];
+    state[2]        = state[10];
+    state[10]       = temp;
+    temp            = state[6];
+    state[6]        = state[14];
+    state[14]       = temp;
+
+    // Row 3: shift right by 3 (left by 1)
+    temp            = state[3];
+    state[3]        = state[7];
+    state[7]        = state[11];
+    state[11]       = state[15];
+    state[15]       = temp;
+}
+
+/* MixColumns */
+static void aes_mix_columns(uint8_t state[16]) {
+    uint8_t tmp[16];
+
+    for (int i = 0; i < 4; i++) {
+        int c = 4 * i;
+        uint8_t a0 = state[c];
+        uint8_t a1 = state[c+1];
+        uint8_t a2 = state[c+2];
+        uint8_t a3 = state[c+3];
+
+        tmp[c]   = gmul(a0,2) ^ gmul(a1,3) ^ a2 ^ a3;
+        tmp[c+1] = a0 ^ gmul(a1,2) ^ gmul(a2,3) ^ a3;
+        tmp[c+2] = a0 ^ a1 ^ gmul(a2,2) ^ gmul(a3,3);
+        tmp[c+3] = gmul(a0,3) ^ a1 ^ a2 ^ gmul(a3,2);
+    }
+    memcpy(state, tmp, 16);
+}
+
+/* Inv MixColumns */
+static void aes_inv_mix_columns(uint8_t state[16]) {
+    uint8_t tmp[16];
+
+    for (int i = 0; i < 4; i++) {
+        int c = 4 * i;
+        uint8_t a0 = state[c];
+        uint8_t a1 = state[c+1];
+        uint8_t a2 = state[c+2];
+        uint8_t a3 = state[c+3];
+
+        tmp[c]   = gmul(a0,14) ^ gmul(a1,11) ^ gmul(a2,13) ^ gmul(a3,9);
+        tmp[c+1] = gmul(a0,9)  ^ gmul(a1,14) ^ gmul(a2,11) ^ gmul(a3,13);
+        tmp[c+2] = gmul(a0,13) ^ gmul(a1,9)  ^ gmul(a2,14) ^ gmul(a3,11);
+        tmp[c+3] = gmul(a0,11) ^ gmul(a1,13) ^ gmul(a2,9)  ^ gmul(a3,14);
+    }
+    memcpy(state, tmp, 16);
+}
+
+/* Single-block AES-256 encryption */
+static void aes256_encrypt_block(const AES256_CTX *ctx, uint8_t block[16]) {
+    uint8_t state[16];
+    memcpy(state, block, 16);
+
+    const uint8_t *rk = ctx->round_key;
+    aes_add_round_key(state, rk); // round 0
+
+    // Nr-1 full rounds
+    for (int round = 1; round < AES_256_NR; round++) {
+        aes_sub_bytes(state);
+        aes_shift_rows(state);
+        aes_mix_columns(state);
+        aes_add_round_key(state, rk + 16*round);
+    }
+
+    // Final round
+    aes_sub_bytes(state);
+    aes_shift_rows(state);
+    aes_add_round_key(state, rk + 16*AES_256_NR);
+
+    memcpy(block, state, 16);
+}
+
+/* Single-block AES-256 decryption */
+static void aes256_decrypt_block(const AES256_CTX *ctx, uint8_t block[16]) {
+    uint8_t state[16];
+    memcpy(state, block, 16);
+
+    const uint8_t *rk = ctx->round_key;
+
+    // Initial add round key (last round key)
+    aes_add_round_key(state, rk + 16*AES_256_NR);
+
+    // Nr-1 full inverse rounds
+    for (int round = AES_256_NR - 1; round > 0; round--) {
+        aes_inv_shift_rows(state);
+        aes_inv_sub_bytes(state);
+        aes_add_round_key(state, rk + 16*round);
+        aes_inv_mix_columns(state);
+    }
+
+    // Final round
+    aes_inv_shift_rows(state);
+    aes_inv_sub_bytes(state);
+    aes_add_round_key(state, rk);
+
+    memcpy(block, state, 16);
+}
+
+/* AES-256 CBC encryption with PKCS#7 padding
+ *  - in: plaintext, in_len
+ *  - out: ciphertext, out_len (multiple of 16)
+ */
+static void aes256_cbc_encrypt(const uint8_t *key,
+                               const uint8_t iv[16],
+                               const uint8_t *in, size_t in_len,
+                               uint8_t *out, size_t *out_len) {
+    AES256_CTX ctx;
+    aes256_key_expansion(key, &ctx);
+
+    uint8_t prev[16];
+    memcpy(prev, iv, 16);
+
+    // PKCS#7 padding length
+    size_t pad_len = AES_BLOCK_SIZE - (in_len % AES_BLOCK_SIZE);
+    if (pad_len == 0) pad_len = AES_BLOCK_SIZE;
+    size_t total_len = in_len + pad_len;
+
+    // Process all full blocks including padded
+    size_t offset = 0;
+    while (offset < total_len) {
+        uint8_t block[16];
+        for (int i = 0; i < 16; i++) {
+            size_t idx = offset + i;
+            uint8_t byte = 0x00;
+            if (idx < in_len) {
+                byte = in[idx];
+            } else {
+                byte = (uint8_t)pad_len; // padding
+            }
+            block[i] = byte ^ prev[i];
+        }
+
+        aes256_encrypt_block(&ctx, block);
+        memcpy(out + offset, block, 16);
+        memcpy(prev, block, 16);
+        offset += 16;
+    }
+
+    *out_len = total_len;
+}
+
+/* AES-256 CBC decryption with PKCS#7 removal
+ * - in: ciphertext, in_len (multiple of 16)
+ * - out: plaintext, out_len (after removing padding)
+ */
+static int aes256_cbc_decrypt(const uint8_t *key,
+                              const uint8_t iv[16],
+                              const uint8_t *in, size_t in_len,
+                              uint8_t *out, size_t *out_len) {
+    if (in_len == 0 || (in_len % AES_BLOCK_SIZE) != 0) {
+        return -1;
+    }
+
+    AES256_CTX ctx;
+    aes256_key_expansion(key, &ctx);
+
+    uint8_t prev[16];
+    memcpy(prev, iv, 16);
+
+    size_t offset = 0;
+    while (offset < in_len) {
+        uint8_t block[16];
+        memcpy(block, in + offset, 16);
+        uint8_t tmp[16];
+        memcpy(tmp, block, 16);
+
+        aes256_decrypt_block(&ctx, block);
+        for (int i = 0; i < 16; i++) {
+            out[offset + i] = block[i] ^ prev[i];
+        }
+
+        memcpy(prev, tmp, 16);
+        offset += 16;
+    }
+
+    // Remove PKCS#7 padding
+    if (offset == 0) return -1;
+    uint8_t pad = out[offset - 1];
+    if (pad == 0 || pad > AES_BLOCK_SIZE) return -1;
+    for (int i = 0; i < pad; i++) {
+        if (out[offset - 1 - i] != pad) {
+            return -1;
+        }
+    }
+    *out_len = offset - pad;
+    return 0;
+}
+
+/* =========================================================
+ *  MAC computation
+ *  MAC = SHA256( (K xor ONE256) || SHA256( (K xor TWO256) || M ) )
+ * ========================================================= */
+
+static void compute_mac(const uint8_t K[32],
+                        const uint8_t *M, size_t Mlen,
+                        uint8_t MAC[32]) {
+    uint8_t one256[32] = {0};
+    uint8_t two256[32] = {0};
+    one256[31] = 0x01; // integer 1 in 256-bit big-endian
+    two256[31] = 0x02; // integer 2
+
+    uint8_t K1[32], K2[32];
+    for (int i = 0; i < 32; i++) {
+        K1[i] = K[i] ^ one256[i];
+        K2[i] = K[i] ^ two256[i];
+    }
+
+    // inner = SHA256( (K2) || M )
+    uint8_t *inner_input = (uint8_t*)malloc(32 + Mlen);
+    memcpy(inner_input, K2, 32);
+    memcpy(inner_input + 32, M, Mlen);
+    uint8_t inner[32];
+    sha256(inner_input, 32 + Mlen, inner);
+    free(inner_input);
+
+    // outer = SHA256( (K1) || inner )
+    uint8_t outer_input[64];
+    memcpy(outer_input, K1, 32);
+    memcpy(outer_input + 32, inner, 32);
+    sha256(outer_input, 64, MAC);
+}
+
+/* =========================================================
+ *  Utility: print byte array as hex (space-separated)
+ * ========================================================= */
+
+static void print_bytes(const uint8_t *buf, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        printf("%02x", buf[i]);
+        if (i + 1 < len) printf(" ");
+    }
+    printf("\n");
+}
+
+/* =========================================================
+ *  MAIN
+ * ========================================================= */
+
+int main(void) {
+    /* 1-3. Curve and alpha point */
+    ECPoint alpha = find_alpha();
+    if (alpha.infinity) {
+        printf("No point found on the curve, something is wrong.\n");
+        return 1;
+    }
+
+    printf("Elliptic curve: y^2 = x^3 + 33x + 111 (mod 113)\n");
+    printf("Selected point alpha on curve (found in code): alpha = (%d, %d)\n",
+           alpha.x, alpha.y);
+
+    /* 4. Read Alice's and Bob's private keys */
+    int nA, nB;
+    printf("Enter Alice's private key nA (1..100): ");
+    if (scanf("%d", &nA) != 1) return 1;
+    printf("Enter Bob's private key nB (1..100): ");
+    if (scanf("%d", &nB) != 1) return 1;
+
+    if (nA < 1 || nA > 100 || nB < 1 || nB > 100) {
+        printf("nA and nB must be in [1, 100].\n");
+        return 1;
+    }
+
+    /* 5. Diffie–Hellman on curve: compute shared SK = (x1, y1) */
+    ECPoint QA = ec_scalar_mul(nA, alpha); // Alice public
+    ECPoint QB = ec_scalar_mul(nB, alpha); // Bob public
+
+    ECPoint SK_A = ec_scalar_mul(nA, QB);  // Alice's shared
+    ECPoint SK_B = ec_scalar_mul(nB, QA);  // Bob's shared
+
+    if (SK_A.infinity || SK_B.infinity ||
+        SK_A.x != SK_B.x || SK_A.y != SK_B.y) {
+        printf("Error: shared point mismatch.\n");
+        return 1;
+    }
+
+    ECPoint SK = SK_A;
+    printf("Shared secret point SK = (%d, %d)\n", SK.x, SK.y);
+
+    /* 6-7. KA = KB = SHA-256(x1 || y1) with x1,y1 as single bytes */
+    uint8_t sk_bytes[2];
+    sk_bytes[0] = (uint8_t)(SK.x & 0xFF);
+    sk_bytes[1] = (uint8_t)(SK.y & 0xFF);
+
+    uint8_t KA[32], KB[32];
+    sha256(sk_bytes, 2, KA);
+    sha256(sk_bytes, 2, KB);
+
+    /* 8. Print KA and KB as 32 bytes */
+    printf("KA (32 bytes): ");
+    print_bytes(KA, 32);
+    printf("KB (32 bytes): ");
+    print_bytes(KB, 32);
+
+    /* 9. Read Alice's 256-bit message MA = 32 bytes hex */
+    uint8_t MA[32];
+    printf("Enter Alice's 256-bit message MA as 32 hex bytes (space separated):\n");
+    for (int i = 0; i < 32; i++) {
+        unsigned int byte;
+        if (scanf("%x", &byte) != 1) {
+            printf("Invalid input for MA.\n");
+            return 1;
+        }
+        MA[i] = (uint8_t)byte;
+    }
+
+    /* 10. Alice encrypts MA using AES-256-CBC with KA and IV=0x11..0x11 */
+    uint8_t IV[16];
+    for (int i = 0; i < 16; i++) IV[i] = 0x11; // "all one" bytes
+
+    uint8_t CA[64];  // enough space
+    size_t CA_len = 0;
+    aes256_cbc_encrypt(KA, IV, MA, 32, CA, &CA_len);
+
+    /* 11. Alice computes MACA using MAC algorithm */
+    uint8_t MACA[32];
+    compute_mac(KA, MA, 32, MACA);
+
+    /* 12. Print ciphertext CA and MACA */
+    printf("Ciphertext CA (bytes): ");
+    print_bytes(CA, CA_len);
+    printf("MACA (32 bytes): ");
+    print_bytes(MACA, 32);
+
+    /* 13. Alice sends CA, MACA, IV to Bob (here: already in memory) */
+
+    /* 14. Bob decrypts CA using AES-256-CBC with KB and IV */
+    uint8_t MB[64];
+    size_t MB_len = 0;
+    if (aes256_cbc_decrypt(KB, IV, CA, CA_len, MB, &MB_len) != 0) {
+        printf("Decryption failed.\n");
+        return 1;
+    }
+
+    // MB_len should be 32; we only consider first 32 bytes as MB
+    if (MB_len != 32) {
+        printf("Warning: decrypted length is %zu, expected 32.\n", MB_len);
+    }
+
+    /* 15. Bob computes MACB with KB and MB */
+    uint8_t MACB[32];
+    compute_mac(KB, MB, MB_len, MACB);
+
+    /* 16. Display MB and MACB */
+    printf("Decrypted message MB (bytes): ");
+    print_bytes(MB, MB_len);
+    printf("MACB (32 bytes): ");
+    print_bytes(MACB, 32);
+
+    /* Simple correctness hint:
+       If everything is correct, KA = KB, MA = MB, MACA = MACB. */
+
+    return 0;
+}
