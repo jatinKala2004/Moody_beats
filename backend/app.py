@@ -7,7 +7,8 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from songs import mood_data
 import os
-
+from dotenv import load_dotenv
+load_dotenv()
 # Install these if you haven'                                                                                                        
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
