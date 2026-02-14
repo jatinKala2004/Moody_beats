@@ -33,16 +33,25 @@ if not database_url:
     raise RuntimeError("DATABASE_URL is missing! Did you set it in Render env vars?")
 
 # SQLAlchemy expects postgresql+psycopg
-if database_url.startswith("postgres://"):
+'''if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql+psycopg://", 1)
 elif database_url.startswith("postgresql://"):
     database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
- 
+'''
+# Use psycopg2 driver
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql+psycopg2://", 1)
+elif database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
+with app.app_context():
+    db.create_all()
+    print("✅ Tables created (if not existing)")
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -691,5 +700,5 @@ if __name__ == '__main__':
                     ))
             db.session.commit()
             print('Seeded Song table from mood_data!')
-    print('Database tables created!')
+    print('Database tables created!')c
     app.run(debug=True, host='0.0.0.0', port=5000)
