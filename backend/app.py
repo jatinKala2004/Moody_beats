@@ -49,9 +49,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-with app.app_context():
-    db.create_all()
-    print("✅ Tables created (if not existing)")
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -110,6 +108,27 @@ class SmartShuffleHistory(db.Model):
     played_at = db.Column(db.DateTime, default=datetime.utcnow)
     user = db.relationship('User', backref=db.backref('smart_shuffle_history', lazy=True))
     song = db.relationship('Song', backref=db.backref('smart_shuffle_histories', lazy=True))
+
+# ---- DATABASE INITIALIZATION ----
+with app.app_context():
+    db.create_all()
+    print("✅ Tables created")
+
+    # Seed songs if empty
+    from songs import mood_data
+    if Song.query.count() == 0:
+        print("🎵 Seeding songs...")
+        for mood, songs in mood_data['recommendedSongs'].items():
+            for s in songs:
+                db.session.add(Song(
+                    title=s.get('title', ''),
+                    artist=s.get('artist', ''),
+                    file_url=s.get('file', ''),
+                    mood=mood
+                ))
+        db.session.commit()
+        print("✅ Songs seeded successfully!")
+
 
 # Serve static files (songs)
 @app.route('/static/songs/<path:filename>')
@@ -684,21 +703,6 @@ def contact_us():
     else:
         return jsonify({'error': 'Failed to send message. Please try again later.'}), 500
 
+
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-        # --- Automatic Song Seeding ---
-        from songs import mood_data
-        if Song.query.count() == 0:
-            for mood, songs in mood_data['recommendedSongs'].items():
-                for s in songs:
-                    db.session.add(Song(
-                        title=s.get('title', ''),
-                        artist=s.get('artist', ''),
-                        file_url=s.get('file', ''),
-                        mood=mood
-                    ))
-            db.session.commit()
-            print('Seeded Song table from mood_data!')
-    print('Database tables created!')c
     app.run(debug=True, host='0.0.0.0', port=5000)
