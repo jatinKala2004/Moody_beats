@@ -689,6 +689,20 @@ def get_premium_status(current_user):
         'premium_until': current_user.premium_until.strftime('%Y-%m-%d') if current_user.premium_until else None
     })
 
+@app.route('/api/premium/cancel', methods=['POST'])
+@token_required
+def cancel_premium(current_user):
+    """Cancel user's premium subscription (demo endpoint)"""
+    current_user.is_premium = False
+    current_user.premium_until = None
+    db.session.commit()
+
+    return jsonify({
+        'message': 'Premium subscription cancelled.',
+        'is_premium': False,
+        'premium_until': None
+    })
+
 @app.route('/api/contact', methods=['POST'])
 def contact_us():
     data = request.json
