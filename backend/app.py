@@ -20,6 +20,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_secret_key')
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+CORS(app, resources={r"/api/*": {"origins": "https://moodybeats-frontend.vercel.app"}}, supports_credentials=True)
 
 '''# Prefer DATABASE_URL from environment (Render sets this). Fallback to the existing value for local/dev.
 database_url = os.environ.get('DATABASE_URL')
