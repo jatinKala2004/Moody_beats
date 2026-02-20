@@ -1,11 +1,12 @@
+import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 def send_contact_email(name, email, message):
-    sender_email = 'kalajatin94@gmail.com'
-    sender_password = 'pmkhosujeifruwkx'
-    receiver_email = 'kalajatin94@gmail.com'
+    sender_email = os.getenv("EMAIL_USER")
+    sender_password = os.getenv("EMAIL_PASS")
+    receiver_email = os.getenv("EMAIL_USER")
 
     subject = f'Contact Us Form Submission from {name}'
     body = f"""
@@ -29,4 +30,4 @@ def send_contact_email(name, email, message):
         return True
     except Exception as e:
         print(f'Error sending email: {e}')
-        return False 
+        return False
