@@ -9,7 +9,7 @@ from songs import mood_data
 import os
 from dotenv import load_dotenv
 load_dotenv()
-# Install these if you haven'                                                                                                        
+# Install these if you haven't already:                                                                                                        
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 from datetime import timedelta
@@ -48,7 +48,7 @@ elif database_url.startswith("postgresql://"):
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db = SQLAlchemy(app)
+db = SQLAlchemy(app) # Intialize SQLAlchemy with Flask app 
 
 
 class User(db.Model):
@@ -113,12 +113,12 @@ class SmartShuffleHistory(db.Model):
 # ---- DATABASE INITIALIZATION ----
 with app.app_context():
     db.create_all()
-    print("✅ Tables created")
+    print("Tables created")
 
     # Seed songs if empty
     from songs import mood_data
     if Song.query.count() == 0:
-        print("🎵 Seeding songs...")
+        print("Seeding songs...")
         for mood, songs in mood_data['recommendedSongs'].items():
             for s in songs:
                 db.session.add(Song(
@@ -128,8 +128,13 @@ with app.app_context():
                     mood=mood
                 ))
         db.session.commit()
-        print("✅ Songs seeded successfully!")
+        print("Songs seeded successfully!")
 
+
+@app.route('/api/keepalive')
+def keepalive():
+    db.session.execute('SELECT 1')
+    return "OK"
 
 # Serve static files (songs)
 @app.route('/static/songs/<path:filename>')
