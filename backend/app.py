@@ -48,6 +48,9 @@ elif database_url.startswith("postgresql://"):
 
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "pool_pre_ping": True,
+}
 
 db = SQLAlchemy(app) # Intialize SQLAlchemy with Flask app 
 
@@ -134,8 +137,13 @@ with app.app_context():
 
 @app.route('/api/keepalive')
 def keepalive():
-    db.session.execute(text('SELECT 1'))
-    return "OK"
+    try:
+        db.session.execute(text('SELECT 1'))
+        return "OK", 200
+    except Exception as e:
+        print("Keepalive error:", e)
+        return "OK", 200
+
 
 # Serve static files (songs)
 @app.route('/static/songs/<path:filename>')
