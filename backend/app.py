@@ -15,6 +15,7 @@ import jwt
 from datetime import timedelta
 from functools import wraps
 from send_mail import send_contact_email
+from sqlalchemy import text
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'dev_secret_key')
 
@@ -133,7 +134,7 @@ with app.app_context():
 
 @app.route('/api/keepalive')
 def keepalive():
-    db.session.execute('SELECT 1')
+    db.session.execute(text('SELECT 1'))
     return "OK"
 
 # Serve static files (songs)
